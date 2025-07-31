@@ -306,6 +306,10 @@ func (e *Engine) Stop() error {
 		e.srWatcher.Close()
 	}
 
+	if e.updateManager != nil {
+		e.updateManager.Stop()
+	}
+
 	e.statusRecorder.ReplaceOfflinePeers([]peer.State{})
 	e.statusRecorder.UpdateDNSStates([]peer.NSGroupState{})
 	e.statusRecorder.UpdateRelayStates([]relay.ProbeResult{})

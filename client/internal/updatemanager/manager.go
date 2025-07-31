@@ -1,6 +1,8 @@
 package updatemanager
 
 import (
+	"context"
+	"fmt"
 	"github.com/netbirdio/netbird/client/internal/peer"
 	cProto "github.com/netbirdio/netbird/client/proto"
 	"io"
@@ -16,7 +18,14 @@ import (
 	"github.com/netbirdio/netbird/version"
 )
 
+const (
+	latestVersion     = "latest"
+	disableAutoUpdate = "disabled"
+)
+
 type UpdateManager struct {
+	ctx            context.Context
+	cancel         context.CancelFunc
 	version        string
 	update         *version.Update
 	lastTrigger    time.Time
@@ -25,12 +34,15 @@ type UpdateManager struct {
 
 func NewUpdateManager(statusRecorder *peer.Status) *UpdateManager {
 	update := version.NewUpdate("nb/client")
+	ctx, cancel := context.WithCancel(context.Background())
 	manager := &UpdateManager{
 		update:         update,
 		lastTrigger:    time.Now().Add(-10 * time.Minute),
 		statusRecorder: statusRecorder,
+		ctx:            ctx,
+		cancel:         cancel,
+		version:        disableAutoUpdate,
 	}
-	manager.version = "disabled"
 	update.SetDaemonVersion(version.NetbirdVersion())
 	update.SetOnUpdateListener(manager.CheckForUpdates)
 	return manager
@@ -38,20 +50,25 @@ func NewUpdateManager(statusRecorder *peer.Status) *UpdateManager {
 
 func (u *UpdateManager) SetVersion(v string) {
 	if u.version != v {
-		log.Errorf("############## Version set to %s", v)
+		log.Tracef("Auto-update verstion set to %s", v)
 		u.version = v
 		go u.CheckForUpdates()
 	}
 }
 
+func (u *UpdateManager) Stop() {
+	u.update.StopWatch()
+	u.cancel()
+}
+
 func (u *UpdateManager) CheckForUpdates() {
-	if u.version == "disabled" {
+	if u.version == disableAutoUpdate {
 		log.Trace("Skipped checking for updates, auto-update is disabled")
 		return
 	}
 	currentVersionString := version.NetbirdVersion()
 	updateVersionString := u.version
-	if updateVersionString == "latest" || updateVersionString == "" {
+	if updateVersionString == latestVersion || updateVersionString == "" {
 		if u.update.LatestAvailable == nil {
 			log.Tracef("Latest version not fetched yet")
 			return
@@ -89,27 +106,39 @@ func (u *UpdateManager) CheckForUpdates() {
 	}
 }
 
-func downloadFileToTemporaryDir(fileURL string) (string, error) { //nolint:unused
+func downloadFileToTemporaryDir(ctx context.Context, fileURL string) (string, error) { //nolint:unused
 	tempDir, err := os.MkdirTemp("", "netbird-installer-*")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error creating temporary directory: %w", err)
 	}
 	fileNameParts := strings.Split(fileURL, "/")
 	out, err := os.Create(filepath.Join(tempDir, fileNameParts[len(fileNameParts)-1]))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error creating temporary file: %w", err)
 	}
-	defer out.Close()
+	defer func() {
+		if err := out.Close(); err != nil {
+			log.Errorf("Error closing temporary file: %v", err)
+		}
+	}()
 
-	resp, err := http.Get(fileURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", fileURL, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error creating file download request: %w", err)
 	}
-	defer resp.Body.Close()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("error downloading file: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			log.Errorf("Error closing response body: %v", err)
+		}
+	}()
 
 	_, err = io.Copy(out, resp.Body)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error downloading file: %w", err)
 	}
 
 	log.Tracef("Downloaded update file to %s", out.Name())

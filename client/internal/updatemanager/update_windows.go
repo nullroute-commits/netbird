@@ -20,7 +20,7 @@ func (u *UpdateManager) triggerUpdate(targetVersion string) error {
 	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Netbird`, registry.QUERY_VALUE)
 	if err != nil && strings.Contains(err.Error(), "system cannot find the file specified") {
 		// Installed using MSI installer
-		path, err := downloadFileToTemporaryDir(strings.ReplaceAll(msiDownloadURL, "%s", targetVersion))
+		path, err := downloadFileToTemporaryDir(u.ctx, strings.ReplaceAll(msiDownloadURL, "%s", targetVersion))
 		if err != nil {
 			return err
 		}
@@ -36,7 +36,7 @@ func (u *UpdateManager) triggerUpdate(targetVersion string) error {
 	}
 
 	// Installed using EXE installer
-	path, err := downloadFileToTemporaryDir(strings.ReplaceAll(exeDownloadURL, "%s", targetVersion))
+	path, err := downloadFileToTemporaryDir(u.ctx, strings.ReplaceAll(exeDownloadURL, "%s", targetVersion))
 	if err != nil {
 		return err
 	}
