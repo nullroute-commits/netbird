@@ -3,7 +3,9 @@
 package updatemanager
 
 import (
+	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	log "github.com/sirupsen/logrus"
@@ -12,31 +14,49 @@ import (
 )
 
 const (
-	msiDownloadURL = "https://github.com/netbirdio/netbird/releases/download/v%s/netbird_installer_%s_windows_amd64.msi"
-	exeDownloadURL = "https://github.com/netbirdio/netbird/releases/download/v%s/netbird_installer_%s_windows_amd64.exe"
+	msiDownloadURL     = "https://github.com/netbirdio/netbird/releases/download/v%version/netbird_installer_%version_windows_%arch.msi"
+	exeDownloadURL     = "https://github.com/netbirdio/netbird/releases/download/v%version/netbird_installer_%version_windows_%arch.exe"
+	uninstallKeyPath64 = `SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Netbird`
+	uninstallKeyPath32 = `SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Netbird`
 )
 
-func (u *UpdateManager) triggerUpdate(targetVersion string) error {
-	k, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\Netbird`, registry.QUERY_VALUE)
-	if err != nil && strings.Contains(err.Error(), "system cannot find the file specified") {
-		// Installed using MSI installer
-		path, err := downloadFileToTemporaryDir(u.ctx, strings.ReplaceAll(msiDownloadURL, "%s", targetVersion))
-		if err != nil {
-			return err
-		}
-		cmd := exec.Command("msiexec", "/quiet", "/i", path)
-		err = cmd.Run()
-		return err
-	} else if err != nil {
-		return err
-	}
-	err = k.Close()
+func installationMethod() string {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, uninstallKeyPath64, registry.QUERY_VALUE)
 	if err != nil {
-		log.Warnf("Error closing registry key: %v", err)
+		k, err = registry.OpenKey(registry.LOCAL_MACHINE, uninstallKeyPath32, registry.QUERY_VALUE)
+		if err != nil {
+			return "MSI"
+		} else {
+			err = k.Close()
+			if err != nil {
+				log.Warnf("Error closing registry key: %v", err)
+			}
+		}
+	} else {
+		err = k.Close()
+		if err != nil {
+			log.Warnf("Error closing registry key: %v", err)
+		}
 	}
+	return "EXE"
+}
 
-	// Installed using EXE installer
-	path, err := downloadFileToTemporaryDir(u.ctx, strings.ReplaceAll(exeDownloadURL, "%s", targetVersion))
+func (u *UpdateManager) updateMSI(targetVersion string) error {
+	url := strings.ReplaceAll(msiDownloadURL, "%version", targetVersion)
+	url = strings.ReplaceAll(url, "%arch", runtime.GOARCH)
+	path, err := downloadFileToTemporaryDir(u.ctx, url)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("msiexec", "/quiet", "/i", path)
+	err = cmd.Run()
+	return err
+}
+
+func (u *UpdateManager) updateEXE(targetVersion string) error {
+	url := strings.ReplaceAll(exeDownloadURL, "%version", targetVersion)
+	url = strings.ReplaceAll(url, "%arch", runtime.GOARCH)
+	path, err := downloadFileToTemporaryDir(u.ctx, url)
 	if err != nil {
 		return err
 	}
@@ -48,4 +68,15 @@ func (u *UpdateManager) triggerUpdate(targetVersion string) error {
 	err = cmd.Process.Release()
 
 	return err
+}
+
+func (u *UpdateManager) triggerUpdate(targetVersion string) error {
+	switch installationMethod() {
+	case "EXE":
+		return u.updateEXE(targetVersion)
+	case "MSI":
+		return u.updateMSI(targetVersion)
+	default:
+		return fmt.Errorf("unsupported installation method: %s", installationMethod())
+	}
 }
